@@ -3,8 +3,12 @@
 # SSL Client Certificate Manager
 # ======================================
 
+# Configuration - will be loaded from config file or prompted
+CONFIG_FILE="/etc/nginx/ssl/.cert-manager.conf"
 CERT_DIR="/etc/nginx/ssl"
-PASSWORD="1234"
+PASSWORD=""
+ORG_NAME=""
+LOG_FILE=""
 
 # Colors
 RED='\033[0;31m'
@@ -19,6 +23,41 @@ print_header() {
     echo -e "${BLUE}================================${NC}"
     echo -e "${BLUE}  SSL Client Certificate Manager${NC}"
     echo -e "${BLUE}================================${NC}"
+    echo ""
+}
+
+# Function: Load or create configuration
+load_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+        echo -e "${GREEN}✅ Configuration loaded from $CONFIG_FILE${NC}"
+    else
+        echo -e "${YELLOW}⚠️  No configuration file found. Let's set up the configuration.${NC}"
+        echo ""
+
+        read -p "Certificate directory [${CERT_DIR}]: " INPUT_DIR
+        CERT_DIR=${INPUT_DIR:-$CERT_DIR}
+
+        read -p "Default password for certificates [1234]: " INPUT_PASS
+        PASSWORD=${INPUT_PASS:-1234}
+
+        read -p "Organization name [MyCompany]: " INPUT_ORG
+        ORG_NAME=${INPUT_ORG:-MyCompany}
+
+        read -p "NGINX access log file [/var/log/nginx/app-access.log]: " INPUT_LOG
+        LOG_FILE=${INPUT_LOG:-/var/log/nginx/app-access.log}
+
+        # Save configuration
+        cat > "$CONFIG_FILE" << EOF
+CERT_DIR="$CERT_DIR"
+PASSWORD="$PASSWORD"
+ORG_NAME="$ORG_NAME"
+LOG_FILE="$LOG_FILE"
+EOF
+        chmod 600 "$CONFIG_FILE"
+        echo ""
+        echo -e "${GREEN}✅ Configuration saved to $CONFIG_FILE${NC}"
+    fi
     echo ""
 }
 
@@ -50,7 +89,7 @@ create_cert() {
     
     # Create request
     openssl req -new -key client_${USERNAME}.key -out client_${USERNAME}.csr \
-      -subj "/C=IL/ST=Israel/L=TelAviv/O=MyCompany/CN=$USERNAME" 2>/dev/null
+      -subj "/C=IL/ST=Israel/L=TelAviv/O=${ORG_NAME}/CN=$USERNAME" 2>/dev/null
     
     # Sign certificate
     openssl x509 -req -in client_${USERNAME}.csr -CA ca.crt -CAkey ca.key \
@@ -182,21 +221,77 @@ export_cert() {
 show_stats() {
     echo -e "${BLUE}📊 Connection Statistics${NC}"
     echo "================================"
-    
-    if [ ! -f "/var/log/nginx/app-access.log" ]; then
-        echo -e "${YELLOW}⚠️  Log file not found${NC}"
+
+    if [ -z "$LOG_FILE" ]; then
+        read -p "Enter NGINX access log path: " LOG_FILE
+    fi
+
+    if [ ! -f "$LOG_FILE" ]; then
+        echo -e "${YELLOW}⚠️  Log file not found: $LOG_FILE${NC}"
         return
     fi
-    
+
+    echo "Log file: $LOG_FILE"
+    echo ""
     echo "Connections by user (today):"
     echo ""
-    
+
     TODAY=$(date +%d/%b/%Y)
-    grep "$TODAY" /var/log/nginx/app-access.log 2>/dev/null | \
+    grep "$TODAY" "$LOG_FILE" 2>/dev/null | \
     grep -oP 'CN=\K[^,]+' | sort | uniq -c | sort -rn | \
     while read count user; do
         echo -e "${GREEN}👤 $user:${NC} $count connections"
     done
+}
+
+# Function: Change Settings
+change_settings() {
+    echo -e "${BLUE}⚙️  Change Settings${NC}"
+    echo "================================"
+    echo ""
+    echo "Current settings:"
+    echo "  1) Certificate directory: $CERT_DIR"
+    echo "  2) Default password: $PASSWORD"
+    echo "  3) Organization name: $ORG_NAME"
+    echo "  4) Log file: $LOG_FILE"
+    echo "  5) Back to menu"
+    echo ""
+    read -p "Select setting to change (1-5): " SETTING
+
+    case $SETTING in
+        1)
+            read -p "New certificate directory [$CERT_DIR]: " NEW_DIR
+            CERT_DIR=${NEW_DIR:-$CERT_DIR}
+            ;;
+        2)
+            read -p "New default password [$PASSWORD]: " NEW_PASS
+            PASSWORD=${NEW_PASS:-$PASSWORD}
+            ;;
+        3)
+            read -p "New organization name [$ORG_NAME]: " NEW_ORG
+            ORG_NAME=${NEW_ORG:-$ORG_NAME}
+            ;;
+        4)
+            read -p "New log file path [$LOG_FILE]: " NEW_LOG
+            LOG_FILE=${NEW_LOG:-$LOG_FILE}
+            ;;
+        5)
+            return
+            ;;
+        *)
+            echo -e "${RED}❌ Invalid choice!${NC}"
+            return
+            ;;
+    esac
+
+    # Save updated configuration
+    cat > "$CONFIG_FILE" << EOF
+CERT_DIR="$CERT_DIR"
+PASSWORD="$PASSWORD"
+ORG_NAME="$ORG_NAME"
+LOG_FILE="$LOG_FILE"
+EOF
+    echo -e "${GREEN}✅ Settings saved!${NC}"
 }
 
 # Main Menu
@@ -210,9 +305,10 @@ main_menu() {
         echo "3) 📋 List certificates"
         echo "4) 📤 Export certificate"
         echo "5) 📊 Connection statistics"
-        echo "6) 🚪 Exit"
+        echo "6) ⚙️  Change settings"
+        echo "7) 🚪 Exit"
         echo ""
-        read -p "Choice (1-6): " CHOICE
+        read -p "Choice (1-7): " CHOICE
         
         echo ""
         case $CHOICE in
@@ -232,6 +328,9 @@ main_menu() {
                 show_stats
                 ;;
             6)
+                change_settings
+                ;;
+            7)
                 echo -e "${GREEN}Goodbye! 👋${NC}"
                 exit 0
                 ;;
@@ -246,10 +345,14 @@ main_menu() {
 }
 
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then 
+if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}❌ Please run with sudo!${NC}"
     exit 1
 fi
+
+# Load configuration
+print_header
+load_config
 
 # Run menu
 main_menu
